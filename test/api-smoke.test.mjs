@@ -72,6 +72,30 @@ test("CORS permits the configured frontend origin", async () => {
   assert.equal(response.headers.get("access-control-allow-credentials"), "true");
 });
 
+test("staff password reset request validates the email address", async () => {
+  const response = await fetch(`${baseUrl}/api/staff-auth/request-password-reset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: "not-an-email" })
+  });
+  assert.equal(response.status, 400);
+  const result = await response.json();
+  assert.equal(result.error, "Validation failed");
+  assert.match(result.details.fieldErrors.email[0], /email/i);
+});
+
+test("staff password reset rejects malformed tokens", async () => {
+  const response = await fetch(`${baseUrl}/api/staff-auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token: "too-short", password: "a-secure-new-password" })
+  });
+  assert.equal(response.status, 400);
+  const result = await response.json();
+  assert.equal(result.error, "Validation failed");
+  assert.match(result.details.fieldErrors.token[0], /32/);
+});
+
 test("production startup rejects a missing Resend webhook secret", () => {
   const result = spawnSync(process.execPath, [
     "--input-type=module",

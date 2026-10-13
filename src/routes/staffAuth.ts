@@ -22,6 +22,13 @@ const loginSchema = z.object({
   email: z.string().trim().email(),
   password: z.string().min(1).max(128)
 });
+const passwordResetRequestSchema = z.object({
+  email: z.string().trim().email()
+});
+const passwordResetSchema = z.object({
+  token: z.string().min(32),
+  password: z.string().min(12).max(128)
+});
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const passwordHash = (password: string, salt = randomBytes(16).toString('hex')) => ({
   salt,
@@ -35,6 +42,9 @@ const matchesPassword = (password: string, salt: string, savedHash: string) => {
 const resend = new Resend(config.RESEND_API_KEY ?? 're_not_configured');
 const sessionLifetimeMs = 8 * 60 * 60 * 1000;
 const invitationLifetimeMs = 24 * 60 * 60 * 1000;
+const passwordResetLifetimeMs = 60 * 60 * 1000;
+const passwordResetCooldownMs = 5 * 60 * 1000;
+const passwordResetResponse = 'If an active staff account exists for that email, a password reset link has been sent.';
 
 export const staffAuthRouter = Router();
 
@@ -123,6 +133,95 @@ staffAuthRouter.post('/accept-invitation', asyncHandler(async (request, response
   if (user) await db.collection('staff_sessions').deleteMany({ userId: user._id });
   await db.collection('staff_invitations').deleteOne({ _id: invitation._id });
   response.status(201).json({ message: 'Staff account activated. You can now sign in.' });
+}));
+
+staffAuthRouter.post('/request-password-reset', asyncHandler(async (request, response) => {
+  const values = passwordResetRequestSchema.parse(request.body);
+  if (!config.RESEND_API_KEY || !config.RESEND_FROM_EMAIL) {
+    throw new HttpError(503, 'Password reset email is not configured');
+  }
+
+  const db = await getDatabase();
+  const email = values.email.toLowerCase();
+  const user = await db.collection('staff_users').findOne({ email, active: true });
+  if (!user) {
+    response.status(202).json({ message: passwordResetResponse });
+    return;
+  }
+
+  const resetCollection = db.collection('staff_password_resets');
+  const recentRequest = await resetCollection.findOne({
+    email,
+    createdAt: { $gt: new Date(Date.now() - passwordResetCooldownMs) }
+  });
+  if (recentRequest) {
+    response.status(202).json({ message: passwordResetResponse });
+    return;
+  }
+
+  const rawToken = randomBytes(32).toString('hex');
+  const tokenHash = hash(rawToken);
+  await resetCollection.updateOne(
+    { email },
+    {
+      $set: {
+        email,
+        tokenHash,
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + passwordResetLifetimeMs)
+      }
+    },
+    { upsert: true }
+  );
+
+  const frontendOrigin = config.CLIENT_ORIGIN.split(',')[0].trim();
+  const mailer = new Resend(requireConfig('RESEND_API_KEY'));
+  const result = await mailer.emails.send({
+    from: requireConfig('RESEND_FROM_EMAIL'),
+    to: email,
+    subject: 'Reset your TDS CRM password',
+    html: `<p>Hello ${String(user.name ?? 'there').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character] ?? character)},</p><p><a href="${frontendOrigin}/staff-login?reset=${rawToken}">Reset your TDS CRM password</a></p><p>This link expires in one hour and can only be used once. If you did not request it, you can ignore this email.</p>`
+  });
+  if (result.error) {
+    await resetCollection.deleteOne({ tokenHash });
+    throw new HttpError(502, 'Could not send password reset email');
+  }
+
+  response.status(202).json({ message: passwordResetResponse });
+}));
+
+staffAuthRouter.post('/reset-password', asyncHandler(async (request, response) => {
+  const values = passwordResetSchema.parse(request.body);
+  const db = await getDatabase();
+  const tokenHash = hash(values.token);
+  const resetCollection = db.collection('staff_password_resets');
+  const reset = await resetCollection.findOne({
+    tokenHash,
+    expiresAt: { $gt: new Date() }
+  });
+  if (!reset || typeof reset.email !== 'string') {
+    throw new HttpError(400, 'Password reset link is invalid or has expired');
+  }
+
+  const consumed = await resetCollection.deleteOne({ _id: reset._id, tokenHash });
+  if (consumed.deletedCount !== 1) {
+    throw new HttpError(400, 'Password reset link is invalid or has expired');
+  }
+
+  const credentials = passwordHash(values.password);
+  const user = await db.collection('staff_users').findOneAndUpdate(
+    { email: reset.email, active: true },
+    { $set: { ...credentials, updatedAt: new Date() } },
+    { returnDocument: 'after' }
+  );
+  if (!user) throw new HttpError(400, 'Password reset link is invalid or has expired');
+
+  await Promise.all([
+    db.collection('staff_sessions').deleteMany({ userId: user._id }),
+    resetCollection.deleteMany({ email: reset.email }),
+    db.collection('staff_login_attempts').deleteOne({ key: hash(`${reset.email}:${request.ip}`) })
+  ]);
+  response.json({ message: 'Password updated. You can now sign in.' });
 }));
 
 staffAuthRouter.post('/login', asyncHandler(async (request, response) => {

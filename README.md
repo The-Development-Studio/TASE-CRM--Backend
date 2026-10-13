@@ -11,6 +11,8 @@ The CRM uses a Vercel-hosted Vite frontend, a Render-hosted Express API, MongoDB
 
 Create a **private** Cloudflare R2 bucket and an R2 API token scoped to that bucket with object read/write permissions. Set its account ID, access key ID, secret access key, and bucket name as the four `R2_*` environment variables. Configure the bucket CORS policy to allow `PUT`, `GET`, and `HEAD` from the Vercel frontend origin (and the local Vite origin during development), with the `Content-Type` request header. Add an R2 lifecycle rule to delete objects under the `pending/` prefix after one day.
 
+Staff password reset emails use the same verified Resend sender as staff invitations. Reset links expire after one hour, are single-use, and revoke all active sessions for the account when redeemed.
+
 The Render service binds to the platform-provided `PORT`. Do not put any secret in a `VITE_` variable or commit it to the repository.
 
 ## Deploy the frontend to Vercel
