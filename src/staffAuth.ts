@@ -1,0 +1,70 @@
+import { createHash } from 'node:crypto';
+import { NextFunction, Request, Response } from 'express';
+import { ObjectId } from 'mongodb';
+import { getDatabase } from './database.js';
+import { asyncHandler, HttpError } from './http.js';
+
+export const staffSessionCookie = 'tds_staff_session';
+const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+
+export const readStaffSession = async (request: Request) => {
+  const cookieHeader = request.header('cookie') ?? '';
+  const cookie = cookieHeader.split(';').map((part) => part.trim())
+    .find((part) => part.startsWith(`${staffSessionCookie}=`));
+  if (!cookie) return null;
+
+  const db = await getDatabase();
+  const session = await db.collection('staff_sessions').findOne({
+    tokenHash: digest(cookie.slice(staffSessionCookie.length + 1)),
+    expiresAt: { $gt: new Date() }
+  });
+  if (!session) return null;
+
+  const user = await db.collection('staff_users').findOne({ _id: session.userId, active: true });
+  if (!user) return null;
+  return { id: String(user._id), email: user.email as string, name: user.name as string };
+};
+
+export const requireStaffSession = (
+  request: Request,
+  _response: Response,
+  next: NextFunction
+) => {
+  void readStaffSession(request)
+    .then((session) => {
+      if (!session) {
+        next(new HttpError(401, 'Staff sign-in required'));
+        return;
+      }
+      request.staffUser = session;
+      next();
+    })
+    .catch(next);
+};
+
+export const staffRoute = asyncHandler(async (request, _response, next) => {
+  const session = await readStaffSession(request);
+  if (!session) throw new HttpError(401, 'Staff sign-in required');
+  request.staffUser = session;
+  next();
+});
+
+export const requireStaffAdmin = asyncHandler(async (request, _response, next) => {
+  const session = await readStaffSession(request);
+  if (!session) throw new HttpError(401, 'Staff sign-in required');
+  const db = await getDatabase();
+  const user = await db.collection('staff_users').findOne({ _id: new ObjectId(session.id) });
+  if (user?.role !== 'admin') throw new HttpError(403, 'Staff administrator access required');
+  request.staffUser = session;
+  next();
+});
+
+export const hashStaffSessionToken = digest;
+
+declare global {
+  namespace Express {
+    interface Request {
+      staffUser?: { id: string; email: string; name: string };
+    }
+  }
+}
