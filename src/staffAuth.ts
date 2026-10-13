@@ -22,7 +22,14 @@ export const readStaffSession = async (request: Request) => {
 
   const user = await db.collection('staff_users').findOne({ _id: session.userId, active: true });
   if (!user) return null;
-  return { id: String(user._id), email: user.email as string, name: user.name as string };
+  const role: 'admin' | 'staff' = user.role === 'admin' ? 'admin' : 'staff';
+  return {
+    id: String(user._id),
+    email: user.email as string,
+    name: user.name as string,
+    role,
+    pageAccess: Array.isArray(user.pageAccess) ? user.pageAccess.filter((page): page is string => typeof page === 'string') : []
+  };
 };
 
 export const requireStaffSession = (
@@ -59,12 +66,32 @@ export const requireStaffAdmin = asyncHandler(async (request, _response, next) =
   next();
 });
 
+export const requireStaffPage = (page: string) => asyncHandler(async (request, _response, next) => {
+  const session = request.staffUser ?? await readStaffSession(request);
+  if (!session) throw new HttpError(401, 'Staff sign-in required');
+  if (session.role !== 'admin' && !session.pageAccess.includes(page)) {
+    throw new HttpError(403, 'You do not have access to this area');
+  }
+  request.staffUser = session;
+  next();
+});
+
+export const requireStaffAnyPage = (pages: string[]) => asyncHandler(async (request, _response, next) => {
+  const session = request.staffUser ?? await readStaffSession(request);
+  if (!session) throw new HttpError(401, 'Staff sign-in required');
+  if (session.role !== 'admin' && !pages.some((page) => session.pageAccess.includes(page))) {
+    throw new HttpError(403, 'You do not have access to this area');
+  }
+  request.staffUser = session;
+  next();
+});
+
 export const hashStaffSessionToken = digest;
 
 declare global {
   namespace Express {
     interface Request {
-      staffUser?: { id: string; email: string; name: string };
+      staffUser?: { id: string; email: string; name: string; role: 'admin' | 'staff'; pageAccess: string[] };
     }
   }
 }

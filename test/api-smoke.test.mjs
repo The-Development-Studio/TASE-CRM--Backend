@@ -96,6 +96,22 @@ test("staff password reset rejects malformed tokens", async () => {
   assert.match(result.details.fieldErrors.token[0], /32/);
 });
 
+test("staff profile updates require authentication", async () => {
+  const response = await fetch(`${baseUrl}/api/staff-auth/profile`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Test User", jobTitle: "Sales Manager", department: "Sales", phone: "" })
+  });
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: "Staff sign-in required" });
+});
+
+test("staff page access management requires an administrator", async () => {
+  const response = await fetch(`${baseUrl}/api/staff-auth/users`);
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: "Staff sign-in required" });
+});
+
 test("production startup rejects a missing Resend webhook secret", () => {
   const result = spawnSync(process.execPath, [
     "--input-type=module",

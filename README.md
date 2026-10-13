@@ -13,6 +13,8 @@ Create a **private** Cloudflare R2 bucket and an R2 API token scoped to that buc
 
 Staff password reset emails use the same verified Resend sender as staff invitations. Reset links expire after one hour, are single-use, and revoke all active sessions for the account when redeemed.
 
+New staff members complete their name, title, department, and phone profile on first sign-in. Administrators manage page access for real staff login accounts under **Admin Settings → Users & Roles**; administrators always retain full access, while new non-admin accounts begin with Dashboard access only.
+
 The Render service binds to the platform-provided `PORT`. Do not put any secret in a `VITE_` variable or commit it to the repository.
 
 ## Deploy the frontend to Vercel

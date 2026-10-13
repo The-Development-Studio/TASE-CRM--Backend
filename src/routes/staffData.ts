@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getDatabase } from '../database.js';
 import { asyncHandler, HttpError, serializeDocument } from '../http.js';
 import { resourceSchemas } from '../schemas.js';
-import { requireStaffAdmin, staffRoute } from '../staffAuth.js';
+import { requireStaffAdmin, requireStaffPage, staffRoute } from '../staffAuth.js';
 
 const importSchema = z.object({
   collections: z.record(
@@ -14,7 +14,7 @@ const importSchema = z.object({
 
 export const staffDataRouter = Router();
 
-staffDataRouter.post('/import-local', staffRoute, asyncHandler(async (request, response) => {
+staffDataRouter.post('/import-local', requireStaffAdmin, asyncHandler(async (request, response) => {
   const { collections } = importSchema.parse(request.body);
   const db = await getDatabase();
   const results: Record<string, number> = {};
@@ -53,7 +53,7 @@ staffDataRouter.get('/organization', staffRoute, asyncHandler(async (_request, r
   response.json({ data: organization ? serializeDocument(organization) : null });
 }));
 
-staffDataRouter.put('/organization', staffRoute, asyncHandler(async (request, response) => {
+staffDataRouter.put('/organization', requireStaffPage('org-setup'), asyncHandler(async (request, response) => {
   const organization = resourceSchemas.organizations.parse({
     ...request.body,
     organizationKey: 'default'

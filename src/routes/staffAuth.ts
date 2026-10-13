@@ -7,7 +7,14 @@ import { config, requireConfig } from '../config.js';
 import { getDatabase } from '../database.js';
 import { asyncHandler, HttpError } from '../http.js';
 import { hashStaffSessionToken, staffSessionCookie } from '../staffAuth.js';
-import { readStaffSession } from '../staffAuth.js';
+import { readStaffSession, requireStaffAdmin, staffRoute } from '../staffAuth.js';
+
+const staffPageIds = [
+  'dashboard', 'leads', 'customers', 'activities', 'pipeline', 'quotations', 'proposals',
+  'proforma', 'invoices', 'payments', 'support', 'amc', 'documents', 'analytics', 'admin',
+  'org-setup', 'portal'
+] as const;
+const staffPageSchema = z.enum(staffPageIds);
 
 const invitationSchema = z.object({
   email: z.string().trim().email(),
@@ -29,6 +36,15 @@ const passwordResetSchema = z.object({
   token: z.string().min(32),
   password: z.string().min(12).max(128)
 });
+const profileSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  jobTitle: z.string().trim().min(2).max(120),
+  department: z.string().trim().min(2).max(120),
+  phone: z.string().trim().max(40).default('')
+});
+const pageAccessSchema = z.object({
+  pageAccess: z.array(staffPageSchema).min(1).max(staffPageIds.length)
+});
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const passwordHash = (password: string, salt = randomBytes(16).toString('hex')) => ({
   salt,
@@ -45,6 +61,21 @@ const invitationLifetimeMs = 24 * 60 * 60 * 1000;
 const passwordResetLifetimeMs = 60 * 60 * 1000;
 const passwordResetCooldownMs = 5 * 60 * 1000;
 const passwordResetResponse = 'If an active staff account exists for that email, a password reset link has been sent.';
+const serializeStaffUser = (user: Record<string, unknown>) => ({
+  id: String(user._id),
+  email: String(user.email ?? ''),
+  name: String(user.name ?? ''),
+  role: user.role === 'admin' ? 'admin' : 'staff',
+  jobTitle: String(user.jobTitle ?? ''),
+  department: String(user.department ?? ''),
+  phone: String(user.phone ?? ''),
+  profileCompleted: user.profileCompleted === true,
+  pageAccess: user.role === 'admin'
+    ? [...staffPageIds]
+    : Array.isArray(user.pageAccess)
+      ? user.pageAccess.filter((page): page is typeof staffPageIds[number] => staffPageIds.includes(page as typeof staffPageIds[number]))
+      : ['dashboard']
+});
 
 export const staffAuthRouter = Router();
 
@@ -121,6 +152,11 @@ staffAuthRouter.post('/accept-invitation', asyncHandler(async (request, response
         email: invitation.email,
         name: invitation.name,
         role: invitation.role ?? 'staff',
+        pageAccess: invitation.role === 'admin' ? [...staffPageIds] : ['dashboard'],
+        profileCompleted: false,
+        jobTitle: '',
+        department: '',
+        phone: '',
         ...credentials,
         active: true,
         updatedAt: now
@@ -268,7 +304,7 @@ staffAuthRouter.post('/login', asyncHandler(async (request, response) => {
     path: '/api',
     maxAge: sessionLifetimeMs
   });
-  response.json({ data: { email: user.email, name: user.name, role: user.role } });
+  response.json({ data: serializeStaffUser(user) });
 }));
 
 staffAuthRouter.get('/session', asyncHandler(async (request, response) => {
@@ -284,7 +320,43 @@ staffAuthRouter.get('/session', asyncHandler(async (request, response) => {
   if (!session) throw new HttpError(401, 'Staff sign-in required');
   const user = await db.collection('staff_users').findOne({ _id: session.userId, active: true });
   if (!user) throw new HttpError(401, 'Staff account is inactive');
-  response.json({ data: { email: user.email, name: user.name, role: user.role } });
+  response.json({ data: serializeStaffUser(user) });
+}));
+
+staffAuthRouter.put('/profile', staffRoute, asyncHandler(async (request, response) => {
+  const values = profileSchema.parse(request.body);
+  const db = await getDatabase();
+  const user = await db.collection('staff_users').findOneAndUpdate(
+    { _id: new ObjectId(request.staffUser?.id) },
+    { $set: { ...values, profileCompleted: true, updatedAt: new Date() } },
+    { returnDocument: 'after' }
+  );
+  if (!user) throw new HttpError(404, 'Staff account not found');
+  response.json({ data: serializeStaffUser(user) });
+}));
+
+staffAuthRouter.get('/users', requireStaffAdmin, asyncHandler(async (_request, response) => {
+  const db = await getDatabase();
+  const users = await db.collection('staff_users').find({}, {
+    projection: { passwordHash: 0, salt: 0 }
+  }).sort({ name: 1 }).toArray();
+  response.json({ data: users.map((user) => serializeStaffUser(user)) });
+}));
+
+staffAuthRouter.put('/users/:id/page-access', requireStaffAdmin, asyncHandler(async (request, response) => {
+  const id = String(request.params.id);
+  if (!ObjectId.isValid(id)) throw new HttpError(400, 'Invalid staff account ID');
+  const values = pageAccessSchema.parse(request.body);
+  const db = await getDatabase();
+  const existing = await db.collection('staff_users').findOne({ _id: new ObjectId(id) });
+  if (!existing) throw new HttpError(404, 'Staff account not found');
+  if (existing.role === 'admin') throw new HttpError(400, 'Administrator access cannot be restricted');
+  const user = await db.collection('staff_users').findOneAndUpdate(
+    { _id: existing._id },
+    { $set: { pageAccess: [...new Set(values.pageAccess)], updatedAt: new Date() } },
+    { returnDocument: 'after' }
+  );
+  response.json({ data: serializeStaffUser(user as Record<string, unknown>) });
 }));
 
 staffAuthRouter.post('/logout', asyncHandler(async (request, response) => {

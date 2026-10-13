@@ -11,7 +11,7 @@ import { staffAuthRouter } from './routes/staffAuth.js';
 import { staffDataRouter } from './routes/staffData.js';
 import { documentsRouter } from './routes/documents.js';
 import { resourceSchemas } from './schemas.js';
-import { requireStaffSession } from './staffAuth.js';
+import { requireStaffAnyPage, requireStaffPage, requireStaffSession } from './staffAuth.js';
 
 export const app = express();
 
@@ -44,12 +44,25 @@ app.use('/api/staff-auth', staffAuthRouter);
 app.use('/api/customer-portal', customerPortalRouter);
 app.use('/api', requireStaffSession);
 
-app.use('/api/customers', customer360Router);
+app.use('/api/customers', requireStaffPage('customers'), customer360Router);
 app.use('/api/staff-data', staffDataRouter);
+
+const resourcePageAccess: Record<string, string[]> = {
+  customers: ['customers', 'portal'],
+  leads: ['leads', 'portal'],
+  activities: ['activities'],
+  opportunities: ['pipeline'],
+  proposals: ['quotations', 'proposals'],
+  invoices: ['proforma', 'invoices', 'payments'],
+  contracts: ['amc', 'portal'],
+  projects: ['customers', 'portal'],
+  documents: ['documents'],
+  organizations: ['org-setup']
+};
 
 for (const [resource, schema] of Object.entries(resourceSchemas)) {
   if (resource === 'documents') {
-    app.use('/api/documents', documentsRouter);
+    app.use('/api/documents', requireStaffPage('documents'), documentsRouter);
     continue;
   }
   const searchFields = resource === 'customers'
@@ -57,7 +70,7 @@ for (const [resource, schema] of Object.entries(resourceSchemas)) {
     : resource === 'leads'
       ? ['name', 'company', 'email']
       : [];
-  app.use(`/api/${resource}`, createCrudRouter({
+  app.use(`/api/${resource}`, requireStaffAnyPage(resourcePageAccess[resource]), createCrudRouter({
     resource: resource as keyof typeof resourceSchemas,
     schema,
     searchFields
