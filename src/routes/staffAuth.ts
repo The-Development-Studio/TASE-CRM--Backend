@@ -7,7 +7,7 @@ import { config, requireConfig } from '../config.js';
 import { getDatabase } from '../database.js';
 import { asyncHandler, HttpError } from '../http.js';
 import { hashStaffSessionToken, staffSessionCookie } from '../staffAuth.js';
-import { readStaffSession, requireStaffAdmin, staffRoute } from '../staffAuth.js';
+import { readStaffSession, requireStaffAdmin, requireStaffPage, staffRoute } from '../staffAuth.js';
 
 const staffPageIds = [
   'dashboard', 'leads', 'customers', 'activities', 'pipeline', 'quotations', 'proposals',
@@ -15,6 +15,7 @@ const staffPageIds = [
   'org-setup', 'portal'
 ] as const;
 const staffPageSchema = z.enum(staffPageIds);
+const staffAssignablePageIds = staffPageIds.filter((page) => page !== 'admin');
 
 const invitationSchema = z.object({
   email: z.string().trim().email(),
@@ -43,8 +44,13 @@ const profileSchema = z.object({
   phone: z.string().trim().max(40).default('')
 });
 const pageAccessSchema = z.object({
-  pageAccess: z.array(staffPageSchema).min(1).max(staffPageIds.length)
+  pageAccess: z.array(staffPageSchema)
+    .min(1)
+    .max(staffAssignablePageIds.length)
+    .refine((pages) => pages.includes('dashboard'), 'Dashboard access is required')
+    .refine((pages) => !pages.includes('admin'), 'Admin Settings requires the administrator role')
 });
+const accountStatusSchema = z.object({ active: z.boolean() });
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const passwordHash = (password: string, salt = randomBytes(16).toString('hex')) => ({
   salt,
@@ -69,11 +75,16 @@ const serializeStaffUser = (user: Record<string, unknown>) => ({
   jobTitle: String(user.jobTitle ?? ''),
   department: String(user.department ?? ''),
   phone: String(user.phone ?? ''),
+  active: user.active === true,
   profileCompleted: user.profileCompleted === true,
   pageAccess: user.role === 'admin'
     ? [...staffPageIds]
     : Array.isArray(user.pageAccess)
-      ? user.pageAccess.filter((page): page is typeof staffPageIds[number] => staffPageIds.includes(page as typeof staffPageIds[number]))
+      ? [...new Set([
+          'dashboard' as const,
+          ...user.pageAccess.filter((page): page is typeof staffPageIds[number] =>
+            staffAssignablePageIds.includes(page as typeof staffAssignablePageIds[number]))
+        ])]
       : ['dashboard']
 });
 
@@ -343,6 +354,17 @@ staffAuthRouter.get('/users', requireStaffAdmin, asyncHandler(async (_request, r
   response.json({ data: users.map((user) => serializeStaffUser(user)) });
 }));
 
+staffAuthRouter.get('/assignees', requireStaffPage('leads'), asyncHandler(async (_request, response) => {
+  const db = await getDatabase();
+  const users = await db.collection('staff_users').find(
+    { active: true },
+    { projection: { name: 1, email: 1 } }
+  ).sort({ name: 1 }).toArray();
+  response.json({
+    data: users.map((user) => ({ id: String(user._id), name: String(user.name ?? ''), email: String(user.email ?? '') }))
+  });
+}));
+
 staffAuthRouter.put('/users/:id/page-access', requireStaffAdmin, asyncHandler(async (request, response) => {
   const id = String(request.params.id);
   if (!ObjectId.isValid(id)) throw new HttpError(400, 'Invalid staff account ID');
@@ -356,6 +378,24 @@ staffAuthRouter.put('/users/:id/page-access', requireStaffAdmin, asyncHandler(as
     { $set: { pageAccess: [...new Set(values.pageAccess)], updatedAt: new Date() } },
     { returnDocument: 'after' }
   );
+  response.json({ data: serializeStaffUser(user as Record<string, unknown>) });
+}));
+
+staffAuthRouter.put('/users/:id/active', requireStaffAdmin, asyncHandler(async (request, response) => {
+  const id = String(request.params.id);
+  if (!ObjectId.isValid(id)) throw new HttpError(400, 'Invalid staff account ID');
+  const values = accountStatusSchema.parse(request.body);
+  if (request.staffUser?.id === id && !values.active) throw new HttpError(400, 'You cannot deactivate your own account');
+  const db = await getDatabase();
+  const existing = await db.collection('staff_users').findOne({ _id: new ObjectId(id) });
+  if (!existing) throw new HttpError(404, 'Staff account not found');
+  if (existing.role === 'admin') throw new HttpError(400, 'Administrator accounts cannot be deactivated here');
+  const user = await db.collection('staff_users').findOneAndUpdate(
+    { _id: existing._id },
+    { $set: { active: values.active, updatedAt: new Date() } },
+    { returnDocument: 'after' }
+  );
+  if (!values.active) await db.collection('staff_sessions').deleteMany({ userId: existing._id });
   response.json({ data: serializeStaffUser(user as Record<string, unknown>) });
 }));
 

@@ -112,6 +112,22 @@ test("staff page access management requires an administrator", async () => {
   assert.deepEqual(await response.json(), { error: "Staff sign-in required" });
 });
 
+test("lead assignee directory requires lead access", async () => {
+  const response = await fetch(`${baseUrl}/api/staff-auth/assignees`);
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: "Staff sign-in required" });
+});
+
+test("staff account activation requires an administrator", async () => {
+  const response = await fetch(`${baseUrl}/api/staff-auth/users/507f1f77bcf86cd799439011/active`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ active: false })
+  });
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: "Staff sign-in required" });
+});
+
 test("production startup rejects a missing Resend webhook secret", () => {
   const result = spawnSync(process.execPath, [
     "--input-type=module",

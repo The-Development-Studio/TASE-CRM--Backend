@@ -23,12 +23,15 @@ export const readStaffSession = async (request: Request) => {
   const user = await db.collection('staff_users').findOne({ _id: session.userId, active: true });
   if (!user) return null;
   const role: 'admin' | 'staff' = user.role === 'admin' ? 'admin' : 'staff';
+  const storedPageAccess = Array.isArray(user.pageAccess)
+    ? user.pageAccess.filter((page): page is string => typeof page === 'string' && (role === 'admin' || page !== 'admin'))
+    : [];
   return {
     id: String(user._id),
     email: user.email as string,
     name: user.name as string,
     role,
-    pageAccess: Array.isArray(user.pageAccess) ? user.pageAccess.filter((page): page is string => typeof page === 'string') : []
+    pageAccess: role === 'admin' ? storedPageAccess : [...new Set(['dashboard', ...storedPageAccess])]
   };
 };
 
