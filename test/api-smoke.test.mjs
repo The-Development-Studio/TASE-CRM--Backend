@@ -16,6 +16,7 @@ process.env.R2_SECRET_ACCESS_KEY = "replace_me";
 process.env.R2_BUCKET = "replace_me";
 
 const { app } = await import("../dist/app.js");
+const { invoiceSchema, paymentSchema } = await import("../dist/schemas.js");
 
 let server;
 let baseUrl;
@@ -126,6 +127,62 @@ test("staff account activation requires an administrator", async () => {
   });
   assert.equal(response.status, 401);
   assert.deepEqual(await response.json(), { error: "Staff sign-in required" });
+});
+
+test("GST invoice schema accepts compliant commercial fields", () => {
+  const result = invoiceSchema.safeParse({
+    invoiceNo: "INV-2026-00001",
+    customer: "Example Private Limited",
+    type: "Tax Invoice",
+    status: "Draft",
+    amount: 118000,
+    paidAmount: 0,
+    taxableAmount: 100000,
+    discount: 0,
+    gstRate: 18,
+    supplyType: "Intra-state",
+    reverseCharge: "No",
+    customerGstin: "",
+    billingAddress: "Bengaluru, Karnataka",
+    placeOfSupply: "Karnataka (29)",
+    sacCode: "9983",
+    description: "Information technology consulting services",
+    cgstAmount: 9000,
+    sgstAmount: 9000,
+    igstAmount: 0,
+    totalTax: 18000,
+    issueDate: "2026-10-19",
+    dueDate: "2026-11-18"
+  });
+  assert.equal(result.success, true);
+});
+
+test("GST invoice schema rejects invalid tax values", () => {
+  const result = invoiceSchema.safeParse({
+    invoiceNo: "INV-2026-00002",
+    customer: "Example Private Limited",
+    type: "Tax Invoice",
+    status: "Draft",
+    amount: -1,
+    paidAmount: 0,
+    gstRate: 101
+  });
+  assert.equal(result.success, false);
+});
+
+test("payment receipt schema accepts an auditable invoice payment", () => {
+  const result = paymentSchema.safeParse({
+    paymentNumber: "PAY-2026-000001",
+    invoiceId: "inv-1",
+    invoiceNo: "INV-2026-00001",
+    customer: "Example Private Limited",
+    paymentDate: "2026-10-19",
+    amount: 25000,
+    mode: "Bank Transfer",
+    reference: "UTR123456789",
+    notes: "Part payment"
+  });
+  assert.equal(result.success, true);
 });
 
 test("production startup rejects a missing Resend webhook secret", () => {

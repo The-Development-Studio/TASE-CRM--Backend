@@ -54,6 +54,7 @@ const resourcePageAccess: Record<string, string[]> = {
   opportunities: ['pipeline'],
   proposals: ['quotations', 'proposals'],
   invoices: ['proforma', 'invoices', 'payments'],
+  payments: ['payments', 'invoices'],
   contracts: ['amc', 'portal'],
   projects: ['customers', 'portal'],
   documents: ['documents'],

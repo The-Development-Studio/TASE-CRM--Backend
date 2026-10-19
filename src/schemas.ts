@@ -3,6 +3,13 @@ import { z } from 'zod';
 const requiredText = z.string().trim().min(1);
 const optionalText = z.string().trim().optional().default('');
 const dateText = z.string().trim().optional().default('');
+const commercialLineItemSchema = z.object({
+  id: requiredText,
+  description: requiredText,
+  hsnSac: optionalText,
+  quantity: z.number().positive(),
+  rate: z.number().nonnegative()
+});
 
 export const customerSchema = z.object({
   customerCode: requiredText,
@@ -18,6 +25,9 @@ export const customerSchema = z.object({
   renewalDate: dateText,
   relationshipManager: optionalText,
   city: optionalText,
+  customerGstin: z.union([z.string().trim().regex(/^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/), z.literal('')]).optional().default(''),
+  billingAddress: optionalText,
+  state: optionalText,
   internalDocumentLink: z.union([z.url(), z.literal('')]).optional().default('')
 });
 
@@ -35,7 +45,7 @@ export const leadSchema = z.object({
   interestedService: optionalText,
   estimatedBudget: z.number().nonnegative().default(0),
   leadOwner: optionalText,
-  status: z.enum(['New', 'Assigned', 'Contacted', 'Requirement Collected', 'Qualified', 'Opportunity Created', 'Unqualified', 'Converted']),
+  status: z.enum(['New', 'Assigned', 'Contacted', 'Requirement Collected', 'Qualified', 'Opportunity Created', 'Won', 'Unqualified', 'Converted']),
   priority: z.enum(['High', 'Medium', 'Low', 'Urgent']),
   nextFollowUp: dateText,
   nextFollowUpTime: optionalText,
@@ -59,8 +69,56 @@ export const activitySchema = relatedRecord.extend({
 });
 
 export const opportunitySchema = relatedRecord.extend({ name: requiredText, stage: requiredText });
-export const proposalSchema = relatedRecord.extend({ proposalNumber: requiredText, title: requiredText });
-export const invoiceSchema = relatedRecord.extend({ invoiceNo: requiredText, customer: optionalText });
+export const proposalSchema = relatedRecord.extend({
+  proposalNumber: requiredText,
+  title: requiredText,
+  documentType: z.enum(['Quotation', 'Proposal']).optional().default('Proposal'),
+  lineItems: z.array(commercialLineItemSchema).optional().default([]),
+  customerNotes: optionalText,
+  terms: optionalText
+});
+export const invoiceSchema = relatedRecord.extend({
+  invoiceNo: requiredText,
+  customer: requiredText,
+  type: z.enum(['Proforma', 'Tax Invoice']),
+  lineItems: z.array(commercialLineItemSchema).optional().default([]),
+  status: z.enum(['Draft', 'Sent', 'Paid', 'Partially Paid', 'Outstanding', 'Overdue', 'Voided']),
+  amount: z.number().nonnegative(),
+  paidAmount: z.number().nonnegative().default(0),
+  taxableAmount: z.number().nonnegative().optional(),
+  discount: z.number().nonnegative().optional(),
+  gstRate: z.number().min(0).max(100).optional(),
+  supplyType: z.enum(['Intra-state', 'Inter-state', 'Export/SEZ']).optional().default('Intra-state'),
+  reverseCharge: z.enum(['Yes', 'No']).optional().default('No'),
+  customerGstin: optionalText,
+  billingAddress: optionalText,
+  placeOfSupply: optionalText,
+  sacCode: optionalText,
+  description: optionalText,
+  cgstAmount: z.number().nonnegative().optional(),
+  sgstAmount: z.number().nonnegative().optional(),
+  igstAmount: z.number().nonnegative().optional(),
+  totalTax: z.number().nonnegative().optional(),
+  paymentReference: optionalText,
+  paymentDate: dateText,
+  paymentMode: optionalText,
+  purchaseOrderNumber: optionalText,
+  customerNotes: optionalText,
+  terms: optionalText,
+  issueDate: dateText,
+  dueDate: dateText
+});
+export const paymentSchema = z.object({
+  paymentNumber: requiredText,
+  invoiceId: requiredText,
+  invoiceNo: requiredText,
+  customer: requiredText,
+  paymentDate: dateText,
+  amount: z.number().positive(),
+  mode: z.enum(['Bank Transfer', 'UPI', 'Cheque', 'Cash', 'Card', 'Other']),
+  reference: requiredText,
+  notes: optionalText
+});
 export const contractSchema = relatedRecord.extend({ contractNo: requiredText, customer: optionalText });
 export const projectSchema = relatedRecord.extend({
   name: requiredText,
@@ -92,6 +150,7 @@ export const resourceSchemas = {
   opportunities: opportunitySchema,
   proposals: proposalSchema,
   invoices: invoiceSchema,
+  payments: paymentSchema,
   contracts: contractSchema,
   projects: projectSchema,
   documents: documentSchema,
