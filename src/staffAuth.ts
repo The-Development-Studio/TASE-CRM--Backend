@@ -6,6 +6,10 @@ import { asyncHandler, HttpError } from './http.js';
 
 export const staffSessionCookie = 'tds_staff_session';
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+export type StaffRole = 'manager' | 'user';
+
+export const normalizeStaffRole = (role: unknown): StaffRole =>
+  role === 'manager' || role === 'admin' ? 'manager' : 'user';
 
 export const readStaffSession = async (request: Request) => {
   const cookieHeader = request.header('cookie') ?? '';
@@ -22,16 +26,17 @@ export const readStaffSession = async (request: Request) => {
 
   const user = await db.collection('staff_users').findOne({ _id: session.userId, active: true });
   if (!user) return null;
-  const role: 'admin' | 'staff' = user.role === 'admin' ? 'admin' : 'staff';
+  const role = normalizeStaffRole(user.role);
   const storedPageAccess = Array.isArray(user.pageAccess)
-    ? user.pageAccess.filter((page): page is string => typeof page === 'string' && (role === 'admin' || page !== 'admin'))
+    ? user.pageAccess.filter((page): page is string => typeof page === 'string' && (role === 'manager' || page !== 'admin'))
     : [];
   return {
     id: String(user._id),
     email: user.email as string,
     name: user.name as string,
     role,
-    pageAccess: role === 'admin' ? storedPageAccess : [...new Set(['dashboard', ...storedPageAccess])]
+    reportingManagerId: user.reportingManagerId instanceof ObjectId ? String(user.reportingManagerId) : null,
+    pageAccess: role === 'manager' ? storedPageAccess : [...new Set(['dashboard', ...storedPageAccess])]
   };
 };
 
@@ -64,7 +69,7 @@ export const requireStaffAdmin = asyncHandler(async (request, _response, next) =
   if (!session) throw new HttpError(401, 'Staff sign-in required');
   const db = await getDatabase();
   const user = await db.collection('staff_users').findOne({ _id: new ObjectId(session.id) });
-  if (user?.role !== 'admin') throw new HttpError(403, 'Staff administrator access required');
+  if (!user || normalizeStaffRole(user.role) !== 'manager') throw new HttpError(403, 'Manager access required');
   request.staffUser = session;
   next();
 });
@@ -72,7 +77,7 @@ export const requireStaffAdmin = asyncHandler(async (request, _response, next) =
 export const requireStaffPage = (page: string) => asyncHandler(async (request, _response, next) => {
   const session = request.staffUser ?? await readStaffSession(request);
   if (!session) throw new HttpError(401, 'Staff sign-in required');
-  if (session.role !== 'admin' && !session.pageAccess.includes(page)) {
+  if (session.role !== 'manager' && !session.pageAccess.includes(page)) {
     throw new HttpError(403, 'You do not have access to this area');
   }
   request.staffUser = session;
@@ -82,7 +87,7 @@ export const requireStaffPage = (page: string) => asyncHandler(async (request, _
 export const requireStaffAnyPage = (pages: string[]) => asyncHandler(async (request, _response, next) => {
   const session = request.staffUser ?? await readStaffSession(request);
   if (!session) throw new HttpError(401, 'Staff sign-in required');
-  if (session.role !== 'admin' && !pages.some((page) => session.pageAccess.includes(page))) {
+  if (session.role !== 'manager' && !pages.some((page) => session.pageAccess.includes(page))) {
     throw new HttpError(403, 'You do not have access to this area');
   }
   request.staffUser = session;
@@ -94,7 +99,7 @@ export const hashStaffSessionToken = digest;
 declare global {
   namespace Express {
     interface Request {
-      staffUser?: { id: string; email: string; name: string; role: 'admin' | 'staff'; pageAccess: string[] };
+      staffUser?: { id: string; email: string; name: string; role: StaffRole; reportingManagerId: string | null; pageAccess: string[] };
     }
   }
 }

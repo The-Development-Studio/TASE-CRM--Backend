@@ -6,11 +6,11 @@ import { z } from 'zod';
 import { config, requireConfig } from '../config.js';
 import { getDatabase } from '../database.js';
 import { asyncHandler, HttpError } from '../http.js';
-import { hashStaffSessionToken, staffSessionCookie } from '../staffAuth.js';
+import { hashStaffSessionToken, normalizeStaffRole, staffSessionCookie } from '../staffAuth.js';
 import { readStaffSession, requireStaffAdmin, requireStaffPage, staffRoute } from '../staffAuth.js';
 
 const staffPageIds = [
-  'dashboard', 'leads', 'customers', 'activities', 'pipeline', 'quotations', 'proposals',
+  'dashboard', 'leads', 'customers', 'activities', 'pipeline', 'reports', 'quotations', 'proposals',
   'proforma', 'invoices', 'payments', 'support', 'amc', 'documents', 'analytics', 'admin',
   'org-setup', 'portal'
 ] as const;
@@ -20,7 +20,13 @@ const staffAssignablePageIds = staffPageIds.filter((page) => page !== 'admin');
 const invitationSchema = z.object({
   email: z.string().trim().email(),
   name: z.string().trim().min(1).max(120),
-  adminKey: z.string().min(1).optional()
+  adminKey: z.string().min(1).optional(),
+  role: z.enum(['manager', 'user']).optional(),
+  reportingManagerId: z.string().trim().optional()
+}).superRefine((values, context) => {
+  if (values.role === 'user' && !values.reportingManagerId) {
+    context.addIssue({ code: 'custom', path: ['reportingManagerId'], message: 'Select a reporting manager' });
+  }
 });
 const acceptInvitationSchema = z.object({
   token: z.string().min(32),
@@ -48,9 +54,17 @@ const pageAccessSchema = z.object({
     .min(1)
     .max(staffAssignablePageIds.length)
     .refine((pages) => pages.includes('dashboard'), 'Dashboard access is required')
-    .refine((pages) => !pages.includes('admin'), 'Admin Settings requires the administrator role')
+    .refine((pages) => !pages.includes('admin'), 'Admin Settings requires the manager role')
 });
 const accountStatusSchema = z.object({ active: z.boolean() });
+const accountRoleSchema = z.object({
+  role: z.enum(['manager', 'user']),
+  reportingManagerId: z.string().trim().nullable()
+}).superRefine((values, context) => {
+  if (values.role === 'user' && !values.reportingManagerId) {
+    context.addIssue({ code: 'custom', path: ['reportingManagerId'], message: 'Select a reporting manager' });
+  }
+});
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const passwordHash = (password: string, salt = randomBytes(16).toString('hex')) => ({
   salt,
@@ -71,13 +85,14 @@ const serializeStaffUser = (user: Record<string, unknown>) => ({
   id: String(user._id),
   email: String(user.email ?? ''),
   name: String(user.name ?? ''),
-  role: user.role === 'admin' ? 'admin' : 'staff',
+  role: normalizeStaffRole(user.role),
+  reportingManagerId: user.reportingManagerId instanceof ObjectId ? String(user.reportingManagerId) : null,
   jobTitle: String(user.jobTitle ?? ''),
   department: String(user.department ?? ''),
   phone: String(user.phone ?? ''),
   active: user.active === true,
   profileCompleted: user.profileCompleted === true,
-  pageAccess: user.role === 'admin'
+  pageAccess: normalizeStaffRole(user.role) === 'manager'
     ? [...staffPageIds]
     : Array.isArray(user.pageAccess)
       ? [...new Set([
@@ -107,8 +122,8 @@ staffAuthRouter.post('/invitations', asyncHandler(async (request, response) => {
   } else if (!staffSession) {
     throw new HttpError(401, 'Staff sign-in required to invite staff');
   } else {
-    const administrator = await staffUsers.findOne({ _id: new ObjectId(staffSession.id), role: 'admin', active: true });
-    if (!administrator) throw new HttpError(403, 'Staff administrator access required');
+    const manager = await staffUsers.findOne({ _id: new ObjectId(staffSession.id), role: { $in: ['manager', 'admin'] }, active: true });
+    if (!manager) throw new HttpError(403, 'Manager access required');
   }
   if (!config.RESEND_API_KEY || !config.RESEND_FROM_EMAIL) {
     throw new HttpError(503, 'Staff invitations require RESEND_API_KEY and RESEND_FROM_EMAIL to be configured on the backend');
@@ -116,6 +131,20 @@ staffAuthRouter.post('/invitations', asyncHandler(async (request, response) => {
   const apiKey = requireConfig('RESEND_API_KEY');
   const from = requireConfig('RESEND_FROM_EMAIL');
   const email = values.email.toLowerCase();
+  const role = isBootstrap ? 'manager' : values.role ?? 'user';
+  let reportingManagerId: ObjectId | null = null;
+  if (role === 'user') {
+    if (!values.reportingManagerId || !ObjectId.isValid(values.reportingManagerId)) {
+      throw new HttpError(400, 'Select a valid reporting manager');
+    }
+    reportingManagerId = new ObjectId(values.reportingManagerId);
+    const reportingManager = await staffUsers.findOne({
+      _id: reportingManagerId,
+      active: true,
+      role: { $in: ['manager', 'admin'] }
+    });
+    if (!reportingManager) throw new HttpError(400, 'Selected reporting manager is not active');
+  }
   const rawToken = randomBytes(32).toString('hex');
   await db.collection('staff_invitations').updateOne(
     { email },
@@ -123,7 +152,8 @@ staffAuthRouter.post('/invitations', asyncHandler(async (request, response) => {
       $set: {
         email,
         name: values.name,
-        role: isBootstrap ? 'admin' : 'staff',
+        role,
+        reportingManagerId,
         tokenHash: hash(rawToken),
         expiresAt: new Date(Date.now() + invitationLifetimeMs),
         createdAt: new Date()
@@ -162,8 +192,9 @@ staffAuthRouter.post('/accept-invitation', asyncHandler(async (request, response
       $set: {
         email: invitation.email,
         name: invitation.name,
-        role: invitation.role ?? 'staff',
-        pageAccess: invitation.role === 'admin' ? [...staffPageIds] : ['dashboard'],
+        role: normalizeStaffRole(invitation.role),
+        reportingManagerId: invitation.reportingManagerId instanceof ObjectId ? invitation.reportingManagerId : null,
+        pageAccess: normalizeStaffRole(invitation.role) === 'manager' ? [...staffPageIds] : ['dashboard'],
         profileCompleted: false,
         jobTitle: '',
         department: '',
@@ -354,10 +385,11 @@ staffAuthRouter.get('/users', requireStaffAdmin, asyncHandler(async (_request, r
   response.json({ data: users.map((user) => serializeStaffUser(user)) });
 }));
 
-staffAuthRouter.get('/assignees', requireStaffPage('leads'), asyncHandler(async (_request, response) => {
+staffAuthRouter.get('/assignees', requireStaffPage('leads'), asyncHandler(async (request, response) => {
   const db = await getDatabase();
+  const isManager = request.staffUser?.role === 'manager';
   const users = await db.collection('staff_users').find(
-    { active: true },
+    isManager ? { active: true } : { _id: new ObjectId(request.staffUser?.id), active: true },
     { projection: { name: 1, email: 1 } }
   ).sort({ name: 1 }).toArray();
   response.json({
@@ -372,12 +404,50 @@ staffAuthRouter.put('/users/:id/page-access', requireStaffAdmin, asyncHandler(as
   const db = await getDatabase();
   const existing = await db.collection('staff_users').findOne({ _id: new ObjectId(id) });
   if (!existing) throw new HttpError(404, 'Staff account not found');
-  if (existing.role === 'admin') throw new HttpError(400, 'Administrator access cannot be restricted');
+  if (normalizeStaffRole(existing.role) === 'manager') throw new HttpError(400, 'Manager access cannot be restricted');
   const user = await db.collection('staff_users').findOneAndUpdate(
     { _id: existing._id },
     { $set: { pageAccess: [...new Set(values.pageAccess)], updatedAt: new Date() } },
     { returnDocument: 'after' }
   );
+  response.json({ data: serializeStaffUser(user as Record<string, unknown>) });
+}));
+
+staffAuthRouter.put('/users/:id/role', requireStaffAdmin, asyncHandler(async (request, response) => {
+  const id = String(request.params.id);
+  if (!ObjectId.isValid(id)) throw new HttpError(400, 'Invalid staff account ID');
+  const values = accountRoleSchema.parse(request.body);
+  if (request.staffUser?.id === id && values.role !== 'manager') {
+    throw new HttpError(400, 'You cannot change your own role to user');
+  }
+  const db = await getDatabase();
+  const existing = await db.collection('staff_users').findOne({ _id: new ObjectId(id) });
+  if (!existing) throw new HttpError(404, 'Staff account not found');
+  if (normalizeStaffRole(existing.role) === 'manager' && values.role === 'user') {
+    const directReportCount = await db.collection('staff_users').countDocuments({ reportingManagerId: existing._id });
+    if (directReportCount > 0) throw new HttpError(400, "Reassign this manager's users before changing their role");
+  }
+
+  let reportingManagerId: ObjectId | null = null;
+  if (values.role === 'user') {
+    if (!values.reportingManagerId || !ObjectId.isValid(values.reportingManagerId) || values.reportingManagerId === id) {
+      throw new HttpError(400, 'Select a valid reporting manager');
+    }
+    reportingManagerId = new ObjectId(values.reportingManagerId);
+    const reportingManager = await db.collection('staff_users').findOne({
+      _id: reportingManagerId,
+      active: true,
+      role: { $in: ['manager', 'admin'] }
+    });
+    if (!reportingManager) throw new HttpError(400, 'Selected reporting manager is not active');
+  }
+
+  const user = await db.collection('staff_users').findOneAndUpdate(
+    { _id: existing._id },
+    { $set: { role: values.role, reportingManagerId, updatedAt: new Date() } },
+    { returnDocument: 'after' }
+  );
+  await db.collection('staff_sessions').deleteMany({ userId: existing._id });
   response.json({ data: serializeStaffUser(user as Record<string, unknown>) });
 }));
 
@@ -389,7 +459,7 @@ staffAuthRouter.put('/users/:id/active', requireStaffAdmin, asyncHandler(async (
   const db = await getDatabase();
   const existing = await db.collection('staff_users').findOne({ _id: new ObjectId(id) });
   if (!existing) throw new HttpError(404, 'Staff account not found');
-  if (existing.role === 'admin') throw new HttpError(400, 'Administrator accounts cannot be deactivated here');
+  if (normalizeStaffRole(existing.role) === 'manager') throw new HttpError(400, 'Manager accounts cannot be deactivated here');
   const user = await db.collection('staff_users').findOneAndUpdate(
     { _id: existing._id },
     { $set: { active: values.active, updatedAt: new Date() } },

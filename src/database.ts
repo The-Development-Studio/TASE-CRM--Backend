@@ -48,6 +48,7 @@ export const createIndexes = async () => {
     db.collection('portal_login_attempts').createIndex({ key: 1 }, { unique: true }),
     db.collection('portal_login_attempts').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     db.collection('staff_users').createIndex({ email: 1 }, { unique: true }),
+    db.collection('staff_users').createIndex({ reportingManagerId: 1 }),
     db.collection('staff_sessions').createIndex({ tokenHash: 1 }, { unique: true }),
     db.collection('staff_sessions').createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     db.collection('staff_invitations').createIndex({ tokenHash: 1 }, { unique: true }),

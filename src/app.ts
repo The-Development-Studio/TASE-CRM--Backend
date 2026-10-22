@@ -49,9 +49,9 @@ app.use('/api/staff-data', staffDataRouter);
 
 const resourcePageAccess: Record<string, string[]> = {
   customers: ['customers', 'portal'],
-  leads: ['leads', 'portal'],
-  activities: ['activities'],
-  opportunities: ['pipeline'],
+  leads: ['leads', 'portal', 'reports'],
+  activities: ['activities', 'reports'],
+  opportunities: ['pipeline', 'reports'],
   proposals: ['quotations', 'proposals'],
   invoices: ['proforma', 'invoices', 'payments'],
   payments: ['payments', 'invoices'],
@@ -74,7 +74,14 @@ for (const [resource, schema] of Object.entries(resourceSchemas)) {
   app.use(`/api/${resource}`, requireStaffAnyPage(resourcePageAccess[resource]), createCrudRouter({
     resource: resource as keyof typeof resourceSchemas,
     schema,
-    searchFields
+    searchFields,
+    userOwnershipField: resource === 'leads'
+      ? 'leadOwner'
+      : resource === 'activities'
+        ? 'user'
+        : resource === 'opportunities'
+          ? 'owner'
+          : undefined
   }));
 }
 
