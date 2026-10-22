@@ -48,12 +48,12 @@ app.use('/api/customers', requireStaffPage('customers'), customer360Router);
 app.use('/api/staff-data', staffDataRouter);
 
 const resourcePageAccess: Record<string, string[]> = {
-  customers: ['customers', 'portal'],
+  customers: ['customers', 'portal', 'costing'],
   leads: ['leads', 'portal', 'reports'],
   activities: ['activities', 'reports'],
   opportunities: ['pipeline', 'reports'],
-  proposals: ['quotations', 'proposals'],
-  invoices: ['proforma', 'invoices', 'payments'],
+  proposals: ['quotations', 'costing'],
+  invoices: ['proforma', 'invoices', 'payments', 'costing'],
   payments: ['payments', 'invoices'],
   contracts: ['amc', 'portal'],
   projects: ['customers', 'portal'],

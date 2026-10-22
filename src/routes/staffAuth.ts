@@ -10,7 +10,7 @@ import { hashStaffSessionToken, normalizeStaffRole, staffSessionCookie } from '.
 import { readStaffSession, requireStaffAdmin, requireStaffPage, staffRoute } from '../staffAuth.js';
 
 const staffPageIds = [
-  'dashboard', 'leads', 'customers', 'activities', 'pipeline', 'reports', 'quotations', 'proposals',
+  'dashboard', 'leads', 'customers', 'activities', 'pipeline', 'reports', 'quotations', 'costing',
   'proforma', 'invoices', 'payments', 'support', 'amc', 'documents', 'analytics', 'admin',
   'org-setup', 'portal'
 ] as const;

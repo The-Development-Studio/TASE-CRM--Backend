@@ -58,7 +58,7 @@ export const requireStaffSession = (
 };
 
 export const staffRoute = asyncHandler(async (request, _response, next) => {
-  const session = await readStaffSession(request);
+  const session = request.staffUser ?? await readStaffSession(request);
   if (!session) throw new HttpError(401, 'Staff sign-in required');
   request.staffUser = session;
   next();
